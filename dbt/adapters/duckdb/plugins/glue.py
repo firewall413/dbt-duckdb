@@ -2,6 +2,7 @@ from typing import Any
 from typing import Dict
 from typing import Optional
 from typing import Sequence
+from typing import List
 
 import boto3
 from mypy_boto3_glue import GlueClient
@@ -168,6 +169,7 @@ def _get_table_def(
     columns: Sequence["ColumnTypeDef"],
     file_format: str,
     delimiter: str,
+    partition_columns: List[Dict[str, str]],
 ):
     s3_parent = "/".join(s3_path.split("/")[:-1])
     if file_format == "csv":
@@ -181,6 +183,7 @@ def _get_table_def(
         table_def = _get_parquet_table_def(table=table, s3_parent=s3_parent, columns=columns)
     else:
         raise UnsupportedFormatType("Format %s is not supported in Glue registrar." % file_format)
+    table_def = _add_partition_columns(table_def, partition_columns)
     return table_def
 
 
@@ -196,6 +199,16 @@ def _get_glue_client(settings: Dict[str, Any]) -> "GlueClient":
     else:
         return boto3.client("glue")
 
+def _add_partition_columns(table_def: TableInputTypeDef, partition_columns: List[Dict[str, str]]) -> TableInputTypeDef:
+    if 'PartitionKeys' not in table_def:
+        table_def['PartitionKeys'] = []
+    for column in partition_columns:
+        column_type_def = ColumnTypeDef(
+            Name=column['name'],
+            Type=column['type']
+        )
+        table_def['PartitionKeys'].append(column_type_def)
+    return table_def
 
 def create_or_update_table(
     client: GlueClient,
@@ -205,6 +218,7 @@ def create_or_update_table(
     s3_path: str,
     file_format: str,
     delimiter: str,
+    partition_columns: List[Dict[str, str]],
 ) -> None:
     # Existing table in AWS Glue catalog
     glue_table = _get_table(client=client, database=database, table=table)
@@ -215,6 +229,7 @@ def create_or_update_table(
         columns=columns,
         file_format=file_format,
         delimiter=delimiter,
+        partition_columns=partition_columns
     )
     if glue_table:
         # Existing columns in AWS Glue catalog
@@ -231,6 +246,7 @@ class Plugin(BasePlugin):
         self.client = _get_glue_client(config)
         self.database = config.get("glue_database", "default")
         self.delimiter = config.get("delimiter", ",")
+        self.partition_columns = config.get("partition_columns", [])
 
     def store(self, target_config: TargetConfig):
         assert target_config.location is not None
@@ -244,4 +260,5 @@ class Plugin(BasePlugin):
             target_config.location.path,
             target_config.location.format,
             self.delimiter,
+            self.partition_columns
         )
